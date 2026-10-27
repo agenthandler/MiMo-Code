@@ -97,4 +97,4 @@ In the TUI the flag is gated by a one-time red confirmation on startup (you must
 
 - Rules are evaluated in your original insertion order and **the last matching rule wins**. Put the `*` catch-all **first** and more specific patterns after it — a `*` placed last would shadow everything above it (e.g. a trailing `"*": "ask"` makes preceding `allow`/`deny` rules dead code).
 - `external_directory` governs reads/writes outside the project working directory — by default these prompt, so MiMoCode never silently widens scope.
-- Permissions cannot be modified by custom tools/hooks — they are the one system the self-extension surface can't override.
+- Plugins and hooks can decide a request through the `permission.ask` hook: allow what the rules ask about, ask about what they allow, or deny. They cannot override a `deny` rule or approve a forced-ask operation (e.g. destructive bash).

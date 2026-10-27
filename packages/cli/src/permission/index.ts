@@ -11,7 +11,7 @@ import { zod } from "@/util/effect-zod"
 import { Log } from "@/util"
 import { withStatics } from "@/util/schema"
 import { Wildcard } from "@/util"
-import { Deferred, Effect, Layer, Schema, Context } from "effect"
+import { Deferred, Effect, Layer, Option, Schema, Context } from "effect"
 import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
@@ -237,6 +237,27 @@ export const layer = Layer.effect(
       }),
     )
 
+    // The "permission.ask" plugin hook, when a plugin service is running. It
+    // gets the request as Event.Asked carries it, less the id: one allocated
+    // before a slow hook would sort a later prompt ahead of earlier ones. The
+    // plugin module is imported here, not at the top: it imports the session
+    // module, which imports this one.
+    const pluginDecision = Effect.fn("Permission.pluginDecision")(function* (
+      request: Omit<AskInput, "ruleset">,
+      status: "allow" | "ask",
+    ) {
+      const output: { status: "allow" | "ask" | "deny"; reason?: string } = { status }
+      const { Plugin } = yield* Effect.promise(() => import("@/plugin"))
+      const plugin = Option.getOrUndefined(yield* Effect.serviceOption(Plugin.Service))
+      if (!plugin) return output
+      const { sessionID, permission, patterns, metadata, always, tool } = request
+      return yield* plugin.trigger(
+        "permission.ask",
+        { sessionID, permission, patterns: [...patterns], metadata: { ...metadata }, always: [...always], tool },
+        output,
+      )
+    })
+
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput, abortSignal?: AbortSignal) {
       const s = yield* InstanceState.get(state)
       const { approved, pending } = s
@@ -274,6 +295,18 @@ export const layer = Layer.effect(
         if (evaluate(request.permission, pattern, approved).action === "allow") continue
         needsAsk = true
       }
+
+      // Plugins decide next ("permission.ask"), seeing what the rules decided.
+      // A ruleset deny above has already won, and a forced-ask permission can
+      // be denied or asked about but never allowed. A plugin deny tells the
+      // model why and lets the turn go on, as a deny rule does.
+      const hooked = yield* pluginDecision(request, needsAsk ? "ask" : "allow")
+      if (hooked.status === "deny") {
+        log.info("denied by plugin", { permission: request.permission, patterns: request.patterns })
+        return yield* new CorrectedError({ feedback: hooked.reason || "A plugin refused this request." })
+      }
+      if (hooked.status === "allow" && !forced) return
+      if (hooked.status === "ask") needsAsk = true
 
       // Dangerous startup mode and the dedicated delete exemption may bypass
       // the human confirmation, but only after every explicit bash_delete deny

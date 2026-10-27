@@ -4,14 +4,13 @@ import type {
   Project,
   Model,
   Provider,
-  Permission,
   UserMessage,
   Message,
   Part,
   Auth,
   Config as SDKConfig,
 } from "@mimo-ai/sdk"
-import type { Provider as ProviderV2, Model as ModelV2 } from "@mimo-ai/sdk/v2"
+import type { Provider as ProviderV2, Model as ModelV2, PermissionRequest } from "@mimo-ai/sdk/v2"
 
 import type { BunShell } from "./shell.js"
 import { type ToolDefinition } from "./tool.js"
@@ -457,7 +456,25 @@ export interface Hooks {
     input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage },
     output: { headers: Record<string, string> },
   ) => Promise<void>
-  "permission.ask"?: (input: Permission, output: { status: "ask" | "deny" | "allow" }) => Promise<void>
+  /**
+   * Decide a permission request before the user is asked. Called for every
+   * request the configured rules do not deny, with `output.status` set to
+   * their decision ("allow" or "ask"). Match on `input.permission` (a plugin
+   * tool asks under its own permission name) and `input.patterns`.
+   * - "deny" refuses the call. The model is told `output.reason`, or that a
+   *   plugin refused it, and the turn goes on, as after a deny rule.
+   * - "allow" runs the call without asking. A permission that always asks,
+   *   such as bash_delete, cannot be allowed.
+   * - "ask" treats the request as if the rules asked: skip-all, inherited
+   *   grants and non-interactive callers still apply before the user is asked.
+   * Plugins run in order on the same `output`, so a later one can change an
+   * earlier one's decision. The request has no id yet; `input.tool.callID`
+   * links it to the tool call.
+   */
+  "permission.ask"?: (
+    input: Omit<PermissionRequest, "id">,
+    output: { status: "ask" | "deny" | "allow"; reason?: string },
+  ) => Promise<void>
   "command.execute.before"?: (
     input: { command: string; sessionID: string; arguments: string },
     output: { parts: Part[] },
